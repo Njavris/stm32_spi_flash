@@ -48,3 +48,8 @@ Thumbs.db
 *.mov
 *.wmv
 
+#build dir
+build/
+
+#oldconfig file
+sdkconfig.old

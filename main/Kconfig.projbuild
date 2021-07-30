@@ -1,0 +1,27 @@
+menu "STM32 SPI flashing"
+    config STM32_PIN_BOOT
+	int "STM32 Boot mode pin"
+        default 0
+    config STM32_POL_BOOT
+	int "STM32 Boot mode pin polarity"
+        default 1
+    config STM32_SPI_SPEED
+	int "STM32 SPI clock speed"
+	default 8000000
+    config SPI_PIN_STM32_CS
+        int "SPI chip select pin"
+        default 5
+    config SPI_PIN_MISO
+        int "SPI miso pin"
+        default 19
+    config SPI_PIN_MOSI
+        int "SPI mosi pin"
+        default 23
+    config SPI_PIN_CLK
+        int "SPI clk pin"
+        default 18
+    config STM32_TASK_FRAME
+	int "STM32 Flashing task stack frame size"
+	default 4096
+endmenu
+
