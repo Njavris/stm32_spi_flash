@@ -1,7 +1,7 @@
 menu "STM32 SPI flashing"
     config STM32_PIN_BOOTM
 	int "STM32 Boot mode pin"
-        default 0
+        default 17
     config STM32_POL_BOOTM
 	int "STM32 Boot mode pin polarity"
         default 1

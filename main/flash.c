@@ -41,9 +41,9 @@ static void spi_rx(struct spi_dev *dev, uint8_t *data, uint32_t sz) {
 static void stm32_reset(struct spi_dev *dev, bool assert) {
     gpio_set_level(dev->bootm_pin, !(dev->bootm_pol ^ !!assert));
 
-    gpio_set_level(dev->rst_pin, !(dev->rst_pol ^ true));
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    gpio_set_level(dev->rst_pin, !(dev->rst_pol ^ false));
+    gpio_set_level(dev->rst_pin, dev->rst_pol ^ false);
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    gpio_set_level(dev->rst_pin, dev->rst_pol ^ true);
 }
 
 void spi_init(struct spi_dev *dev) {
@@ -87,6 +87,8 @@ void spi_init(struct spi_dev *dev) {
 
     gpio_set_direction(dev->bootm_pin, GPIO_MODE_OUTPUT);
     gpio_set_direction(dev->rst_pin, GPIO_MODE_OUTPUT);
+    gpio_set_pull_mode(dev->bootm_pin, GPIO_PULLDOWN_ONLY);
+//    gpio_set_pull_mode(dev->rst_pin, GPIO_PULLUP_ONLY);
 }
 
 void stm32_flash_task(void *p) {
