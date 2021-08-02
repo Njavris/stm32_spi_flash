@@ -1,10 +1,16 @@
 menu "STM32 SPI flashing"
-    config STM32_PIN_BOOT
+    config STM32_PIN_BOOTM
 	int "STM32 Boot mode pin"
         default 0
-    config STM32_POL_BOOT
+    config STM32_POL_BOOTM
 	int "STM32 Boot mode pin polarity"
         default 1
+    config STM32_PIN_RESET
+	int "STM32 reset mode pin"
+        default -1
+    config STM32_POL_RESET
+	int "STM32 reset pin polarity"
+	default 0
     config STM32_SPI_SPEED
 	int "STM32 SPI clock speed"
 	default 8000000

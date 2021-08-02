@@ -22,6 +22,8 @@ struct spi_dev {
     spi_device_handle_t spidev_hndl;
     int rst_pin;
     int rst_pol;
+    int bootm_pin;
+    int bootm_pol;
     void (*tx)(struct spi_dev *dev, uint8_t *data, uint32_t sz);
     void (*rx)(struct spi_dev *dev, uint8_t *data, uint32_t sz);
     void (*rst)(struct spi_dev *dev, bool assert);
@@ -46,7 +48,14 @@ static void spi_rx(struct spi_dev *dev, uint8_t *data, uint32_t sz) {
 }
 
 static void stm32_reset(struct spi_dev *dev, bool assert) {
-    gpio_set_level(dev->rst_pin, !(dev->rst_pol ^ !!assert));
+    gpio_set_level(dev->bootm_pin, !(dev->bootm_pol ^ !!assert));
+
+    if (dev->rst_pin < 0)
+	return;
+
+    gpio_set_level(dev->rst_pin, !(dev->rst_pol ^ true));
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    gpio_set_level(dev->rst_pin, !(dev->rst_pol ^ false));
 }
 
 void spi_init(struct spi_dev *dev) {
@@ -76,31 +85,44 @@ void spi_init(struct spi_dev *dev) {
 	.pre_cb = NULL,
 	.post_cb = NULL,
     };
+
     ESP_ERROR_CHECK(spi_bus_initialize(VSPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
     ESP_ERROR_CHECK(spi_bus_add_device(VSPI_HOST, &spidev, &dev->spidev_hndl));
 
     dev->tx = spi_tx;
     dev->rx = spi_rx;
     dev->rst = stm32_reset;
-    dev->rst_pin = CONFIG_STM32_PIN_BOOT;
-    dev->rst_pol = CONFIG_STM32_POL_BOOT;
+    dev->rst_pin = CONFIG_STM32_PIN_RESET;
+    dev->rst_pol = CONFIG_STM32_POL_RESET;
+    dev->rst_pin = CONFIG_STM32_PIN_BOOTM;
+    dev->rst_pol = CONFIG_STM32_POL_BOOTM;
 
-    gpio_set_direction(dev->rst_pin, GPIO_MODE_OUTPUT);
+    gpio_set_direction(dev->bootm_pin, GPIO_MODE_OUTPUT);
+    if (dev->rst_pin != -1)
+	gpio_set_direction(dev->rst_pin, GPIO_MODE_OUTPUT);
 }
 
 void stm32_flash_task(void *p) {
     struct spi_dev spi;
     esp_err_t ret;
+    uint8_t buf[4];
+    int i = 5;
+    memset(buf, 0, sizeof(buf));
 
     spi_init(&spi);
-
     spi.rst(&spi, true);
 
-    uint8_t buf[4];
-    memset(buf, 0, sizeof(buf));
+    for (i--; i > 0; i--) {
+	printf("\033[1A\033[K");
+        printf("Reset STM32 in %d\n", i); 
+	vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+
+
     buf[0] = 0x5a;
     spi.tx(&spi, buf, 2);
     spi.rx(&spi, buf, 2);
+
     printf("buf =");
     for (int i = 0; i < sizeof(buf); i++)
 	printf(" %02x", buf[i]);
