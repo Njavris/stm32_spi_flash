@@ -7,7 +7,7 @@ menu "STM32 SPI flashing"
         default 1
     config STM32_PIN_RESET
 	int "STM32 reset mode pin"
-        default -1
+        default 4
     config STM32_POL_RESET
 	int "STM32 reset pin polarity"
 	default 0
