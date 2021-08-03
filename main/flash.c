@@ -66,8 +66,8 @@ void spi_init(struct spi_dev *dev) {
 	.command_bits = 0,
 	.address_bits = 0,
 	.dummy_bits = 0,
-	.queue_size = 32,
-	.flags = SPI_DEVICE_HALFDUPLEX | SPI_DEVICE_BIT_LSBFIRST,
+	.queue_size = 4,
+	.flags = SPI_DEVICE_HALFDUPLEX,
 	.duty_cycle_pos = 0,
 	.input_delay_ns = 0,
 	.pre_cb = NULL,
@@ -82,39 +82,81 @@ void spi_init(struct spi_dev *dev) {
     dev->rst = stm32_reset;
     dev->rst_pin = CONFIG_STM32_PIN_RESET;
     dev->rst_pol = CONFIG_STM32_POL_RESET;
-    dev->rst_pin = CONFIG_STM32_PIN_BOOTM;
-    dev->rst_pol = CONFIG_STM32_POL_BOOTM;
+    dev->bootm_pin = CONFIG_STM32_PIN_BOOTM;
+    dev->bootm_pol = CONFIG_STM32_POL_BOOTM;
 
     gpio_set_direction(dev->bootm_pin, GPIO_MODE_OUTPUT);
     gpio_set_direction(dev->rst_pin, GPIO_MODE_OUTPUT);
-    gpio_set_pull_mode(dev->bootm_pin, GPIO_PULLDOWN_ONLY);
+//    gpio_set_pull_mode(dev->bootm_pin, GPIO_PULLUP_ONLY);
 //    gpio_set_pull_mode(dev->rst_pin, GPIO_PULLUP_ONLY);
+}
+
+static int stm32_sync(struct spi_dev *spi) {
+    uint8_t buf = 0x5a;
+    spi->tx(spi, &buf, 1);
+    spi->rx(spi, &buf, 1);
+    if (buf != 0xa5) {
+	printf("Failed to sync\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int stm32_get_ack(struct spi_dev *spi, int tries) {
+    uint8_t buf = 0x0;
+    spi->tx(spi, &buf, 1);
+    for (int i = 0; i < tries; i++) {
+	spi->rx(spi, &buf, 1);
+	if (buf == 0x79) {
+	    spi->tx(spi, &buf, 1);
+	    return 0;
+	}
+    }
+    printf("Failed to get ack in %d tries\n", tries);
+    return 1;
+}
+
+static int stm32_send_cmd(struct spi_dev *spi, uint8_t cmd) {
+    uint8_t buf = 0x5a;
+    spi->tx(spi, &buf, 1);
+    spi->tx(spi, &cmd, 1);
+    spi->rx(spi, &buf, 1);
+    if (buf != 0x79) {
+	printf("Failed to send cmd %02x\n", cmd);
+	return 1;
+    }
+
+    if (stm32_get_ack(spi, 100)) {
+	printf("Failed to get cmd %02x ack\n", cmd);
+	return 1;
+    }
+    return 0;
 }
 
 void stm32_flash_task(void *p) {
     struct spi_dev spi;
 //    esp_err_t ret;
-    uint8_t buf[4];
-//    int i = 5;
-    memset(buf, 0, sizeof(buf));
 
     spi_init(&spi);
     spi.rst(&spi, true);
 
-//    for (i--; i > 0; i--) {
-//	printf("\033[1A\033[K");
-//        printf("Reset STM32 in %d\n", i); 
-//	vTaskDelay(1000 / portTICK_PERIOD_MS);
-//    }
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    if (stm32_sync(&spi))
+	return;
+    if (stm32_get_ack(&spi, 100))
+	return;
 
-    buf[0] = 0x5a;
-    spi.tx(&spi, buf, 2);
-    spi.rx(&spi, buf, 2);
+    if (stm32_send_cmd(&spi, 0x1))
+	return;
 
-    printf("buf =");
-    for (int i = 0; i < sizeof(buf); i++)
-	printf(" %02x", buf[i]);
+    uint32_t buf[32];
+    spi.rx(&spi, buf, sizeof(buf));
+    for (int i = 0; i < sizeof(buf); i++) {
+	printf("%02x ", buf[i]);
+    }
     printf("\n");
+
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
     
     spi.rst(&spi, false);
 
