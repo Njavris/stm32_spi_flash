@@ -95,28 +95,41 @@ void spi_init(struct spi_dev *dev) {
 //    gpio_set_pull_mode(dev->rst_pin, GPIO_PULLUP_ONLY);
 }
 
+#define STM32_ACK	0x79
+#define STM32_NACK	0x1f
+#define STM32_SOF	0x5a
+#define STM32_RSOF	0xa5
+#define STM32_READ	0x11
+#define STM32_WRITE	0x31
+#define STM32_ERASE	0x44
+
+
 static int stm32_sync(struct spi_dev *spi) {
-    uint8_t buf = 0x5a;
+    uint8_t buf = STM32_SOF;
     spi->tx_rx(spi, &buf, NULL, 1);
     spi->tx_rx(spi, NULL, &buf, 1);
-    if (buf != 0xa5) {
+    if (buf != STM32_RSOF) {
 	printf("Failed to sync\n");
 	return 1;
     }
     return 0;
 }
 
-static int stm32_get_ack(struct spi_dev *spi, int tries) {
+static int stm32_get_ack(struct spi_dev *spi) {
+    int tries = 1000;
     uint8_t buf = 0x0;
     spi->tx_rx(spi, &buf, NULL, 1);
     for (int i = 0; i < tries; i++) {
 	spi->tx_rx(spi, NULL, &buf, 1);
-	if (buf == 0x79) {
+	if (buf == STM32_ACK) {
 	    spi->tx_rx(spi, &buf, NULL, 1);
+printf("With %d try\n", i);
 	    return 0;
+	} else if (buf == STM32_NACK) {
+	    printf("Got NACK\n");
+	    return 1;
 	}
     }
-    printf("Failed to get ack in %d tries\n", tries);
     return 1;
 }
 
@@ -124,12 +137,12 @@ static int stm32_send_cmd(struct spi_dev *spi, uint8_t cmd) {
     uint8_t tx_buf[3];
     uint8_t rx_buf[3];
 
-    tx_buf[0] = 0x5a;
+    tx_buf[0] = STM32_SOF;
     tx_buf[1] = cmd;
-    tx_buf[2] = ~tx_buf[1];
+    tx_buf[2] = ~cmd;
     spi->tx_rx(spi, tx_buf, rx_buf, 3);   
 
-    if (stm32_get_ack(spi, 100)) {
+    if (stm32_get_ack(spi)) {
 	printf("Failed to get cmd %02x ack\n", cmd);
 	return 1;
     }
@@ -138,63 +151,96 @@ static int stm32_send_cmd(struct spi_dev *spi, uint8_t cmd) {
 
 static int stm32_read_mem(struct spi_dev *spi, uint32_t addr, uint8_t *data, uint32_t sz) {
     uint8_t buf[5];
-printf("%s: %d\n", __func__, __LINE__);
-    if (stm32_send_cmd(spi, 0x11)) {
-	printf("Failed to write\n");
+    uint8_t rx_buf[5];
+    if (stm32_send_cmd(spi, STM32_READ)) {
+	printf("Failed to read\n");
 	return 1;
     }
     buf[4] = 0;
     for (int i = 0; i < 4; i++) {
-	buf[i] = (addr >> (i * 8)) & 0xff;
+	buf[i] = ((uint8_t *)&addr)[3 - i];
 	buf[4] ^= buf[i];
     }
 
     spi->tx_rx(spi, buf, NULL, 5);
-    if (stm32_get_ack(spi, 100)) {
-	printf("Failed to get ack\n");
+    if (stm32_get_ack(spi)) {
+	printf("Failed to get read ack\n");
 	return 1;
     }
+
     buf[0] = (uint8_t)(sz -1);
     buf[1] = ~buf[0];
-    spi->tx_rx(spi, NULL, data, 2);
+    spi->tx_rx(spi, buf, rx_buf, 2);
+    while (rx_buf[0] != STM32_ACK)
+	spi->tx_rx(spi, NULL, rx_buf, 1);
+    spi->tx_rx(spi, NULL, rx_buf, 2);
+
+    spi->tx_rx(spi, NULL, data, sz);
+    spi->tx_rx(spi, NULL, buf, 1);
 
     return 0;
 };
 
 static int stm32_write_mem(struct spi_dev *spi, uint32_t addr, uint8_t *data, uint32_t sz) {
     uint8_t buf[5];
-printf("%s: %d\n", __func__, __LINE__);
-    if (stm32_send_cmd(spi, 0x31)) {
+    if (stm32_send_cmd(spi, STM32_WRITE)) {
 	printf("Failed to write\n");
 	return 1;
     }
-
     buf[4] = 0;
     for (int i = 0; i < 4; i++) {
-	buf[i] = (addr >> (i * 8)) & 0xff;
+	buf[i] = ((uint8_t *)&addr)[3 - i];
 	buf[4] ^= buf[i];
     }
 
     spi->tx_rx(spi, buf, NULL, 5);
-    if (stm32_get_ack(spi, 100)) {
-	printf("Failed to get ack\n");
+    if (stm32_get_ack(spi)) {
+	printf("Failed to get write ack\n");
 	return 1;
     }
 
     buf[0] = (uint8_t)(sz -1);
-    buf[1] = ~buf[0];
-    spi->tx_rx(spi, data, NULL, 2);
+    spi->tx_rx(spi, buf, NULL, 1);
 
+    spi->tx_rx(spi, data, NULL, sz);
+
+    buf[0] = sz - 1;
+    for (int i = 0; i < sz; i++)
+	buf[0] ^= data[i];
+    spi->tx_rx(spi, buf, NULL, 1);
+
+    if (stm32_get_ack(spi)) {
+	printf("Failed to get ack\n");
+	return 1;
+    }
     return 0;
 };
+
+static int stm32_erase_mem(struct spi_dev * spi, uint32_t addr, uint32_t sz) {
+    uint8_t buf[5];
+    if (stm32_send_cmd(spi, STM32_ERASE)) {
+	printf("Failed to erase\n");
+	return 1;
+    }
+    buf[0] = 0xff; 
+    buf[1] = 0xff;
+    buf[2] = buf[0] ^ buf[1];
+    spi->tx_rx(spi, buf, NULL, 3);
+
+    if (stm32_get_ack(spi)) {
+	printf("Failed to get erase ack\n");
+	return 1;
+    }
+    return 0;
+}
 
 void stm32_flash_task(void *p) {
     struct spi_dev spi;
     uint8_t buf[32] = { 0x0 };
     memset(buf, 0x0, sizeof(buf));
-    uint8_t write_buf[256];
+    uint8_t write_buf[0x100];
     memset(write_buf, 0x69, sizeof(write_buf));
-    uint8_t read_buf[256];
+    uint8_t read_buf[0x100];
     memset(read_buf, 0, sizeof(read_buf));
 
     spi_init(&spi);
@@ -203,7 +249,7 @@ void stm32_flash_task(void *p) {
     vTaskDelay(100 / portTICK_PERIOD_MS);
     if (stm32_sync(&spi))
 	return;
-    if (stm32_get_ack(&spi, 100))
+    if (stm32_get_ack(&spi))
 	return;
 
     if (stm32_send_cmd(&spi, 0x2))
@@ -216,13 +262,21 @@ void stm32_flash_task(void *p) {
     }
     printf("\n");
 
-    stm32_write_mem(&spi, 0, write_buf, 0x100);
-    stm32_read_mem(&spi, 0, read_buf, 0x100);
+    if (stm32_erase_mem(&spi, 0x8000000, 0x100))
+	printf("Erase Failed\n");
+    write_buf[0] = write_buf[0xff] = 0x55;
+    if (stm32_write_mem(&spi, 0x8000000, write_buf, 0x100))
+	printf("Write Failed\n");
+    if (stm32_read_mem(&spi, 0x8000000, read_buf, 0x100))
+	printf("Reade Failed\n");
 
+    printf("WRITE:\n");
+    for (int i = 0; i < 0x100; i++)
+	printf("%02x ", write_buf[i]);
+    printf("\n");
     printf("READ:\n");
-    for (int i = 0; i < 0xff; i++) {
+    for (int i = 0; i < 0x100; i++)
 	printf("%02x ", read_buf[i]);
-    }
     printf("\n");
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
