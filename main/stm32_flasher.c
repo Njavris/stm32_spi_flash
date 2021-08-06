@@ -48,7 +48,7 @@ static int stm32_sync(struct flasher_dev *dev) {
     spi->tx_rx(spi, &buf, NULL, 1);
     spi->tx_rx(spi, NULL, &buf, 1);
     if (buf != STM32_RSOF) {
-	printf("Failed to sync\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to sync\n");
 	return 1;
     }
     return 0;
@@ -63,10 +63,10 @@ static int stm32_get_ack(struct flasher_dev *dev) {
 	spi->tx_rx(spi, NULL, &buf, 1);
 	if (buf == STM32_ACK) {
 	    spi->tx_rx(spi, &buf, NULL, 1);
-printf("ACK in %d tries\n", i);
+ESP_LOGI(STM32_FLASHER_TAG, "ACK in %d tries\n", i);
 	    return 0;
 	} else if (buf == STM32_NACK) {
-	    printf("Got NACK\n");
+	    ESP_LOGE(STM32_FLASHER_TAG, "Got NACK\n");
 	    return 1;
 	}
 	vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -85,7 +85,7 @@ static int stm32_send_cmd(struct flasher_dev *dev, uint8_t cmd) {
     spi->tx_rx(spi, tx_buf, rx_buf, 3);   
 
     if (stm32_get_ack(dev)) {
-	printf("Failed to get cmd %02x ack\n", cmd);
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to get cmd %02x ack\n", cmd);
 	return 1;
     }
     return 0;
@@ -96,7 +96,7 @@ static int stm32_read_mem(struct flasher_dev *dev, uint32_t addr, uint8_t *data,
     uint8_t buf[5];
     uint8_t rx_buf[5];
     if (stm32_send_cmd(dev, STM32_READ)) {
-	printf("Failed to read\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to read\n");
 	return 1;
     }
     buf[4] = 0;
@@ -107,7 +107,7 @@ static int stm32_read_mem(struct flasher_dev *dev, uint32_t addr, uint8_t *data,
 
     spi->tx_rx(spi, buf, NULL, 5);
     if (stm32_get_ack(dev)) {
-	printf("Failed to get read ack\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to get read ack\n");
 	return 1;
     }
 
@@ -128,7 +128,7 @@ static int stm32_write_mem(struct flasher_dev *dev, uint32_t addr, uint8_t *data
     struct spi_dev *spi = dev->spidev;
     uint8_t buf[5];
     if (stm32_send_cmd(dev, STM32_WRITE)) {
-	printf("Failed to write\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to write\n");
 	return 1;
     }
     buf[4] = 0;
@@ -139,7 +139,7 @@ static int stm32_write_mem(struct flasher_dev *dev, uint32_t addr, uint8_t *data
 
     spi->tx_rx(spi, buf, NULL, 5);
     if (stm32_get_ack(dev)) {
-	printf("Failed to get write ack\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to get write ack\n");
 	return 1;
     }
 
@@ -154,7 +154,7 @@ static int stm32_write_mem(struct flasher_dev *dev, uint32_t addr, uint8_t *data
     spi->tx_rx(spi, buf, NULL, 1);
 
     if (stm32_get_ack(dev)) {
-	printf("Failed to get ack\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to get ack\n");
 	return 1;
     }
     return 0;
@@ -165,7 +165,7 @@ static int stm32_erase_mem(struct flasher_dev *dev, uint32_t sz) {
     struct spi_dev *spi = dev->spidev;
     uint8_t buf[5];
     if (stm32_send_cmd(dev, STM32_ERASE)) {
-	printf("Failed to erase\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to erase\n");
 	return 1;
     }
     buf[0] = 0xff; 
@@ -174,7 +174,7 @@ static int stm32_erase_mem(struct flasher_dev *dev, uint32_t sz) {
     spi->tx_rx(spi, buf, NULL, 3);
 
     if (stm32_get_ack(dev)) {
-	printf("Failed to get erase ack\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to get erase ack\n");
 	return 1;
     }
     return 0;
@@ -183,8 +183,6 @@ static int stm32_erase_mem(struct flasher_dev *dev, uint32_t sz) {
 void stm32_flash_task(void *p) {
     struct flasher_dev *dev = (struct flasher_dev *)p;
 
-    uint8_t buf[32] = { 0x0 };
-    memset(buf, 0x0, sizeof(buf));
     uint8_t write_buf[0x100];
     memset(write_buf, 0x69, sizeof(write_buf));
     uint8_t read_buf[0x100];
@@ -196,23 +194,12 @@ void stm32_flash_task(void *p) {
     if (stm32_get_ack(dev))
 	goto fail;
 
-    if (stm32_send_cmd(dev, 0x2))
-	goto fail;
-
-    dev->spidev->tx_rx(dev->spidev, NULL, buf, sizeof(buf));
-
-    for (int i = 0; i < sizeof(buf); i++) {
-	printf("%02x ", buf[i]);
-    }
-    printf("\n");
-
     if (stm32_erase_mem(dev, 0x100))
-	printf("Erase Failed\n");
-    write_buf[0] = write_buf[0xff] = 0x55;
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
     if (stm32_write_mem(dev, 0x8000000, write_buf, 0x100))
-	printf("Write Failed\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Write Failed\n");
     if (stm32_read_mem(dev, 0x8000000, read_buf, 0x100))
-	printf("Reade Failed\n");
+	ESP_LOGE(STM32_FLASHER_TAG, "Reade Failed\n");
 
     printf("WRITE:\n");
     for (int i = 0; i < 0x100; i++)
@@ -228,9 +215,8 @@ void stm32_flash_task(void *p) {
     stm32_reset(dev, false);
 
 fail:
-    while(1) {
-	vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
+    ESP_LOGI(STM32_FLASHER_TAG, "%s done\n", __func__);
+    vTaskDelete(NULL);
 }
 
 void spawn_flash_task(struct flasher_dev *dev, struct spi_dev *spi, char *filename) {

@@ -9,6 +9,7 @@ void app_main(void) {
     struct flasher_dev flashdev;
     spi_init(&spidev);
     spawn_flash_task(&flashdev, &spidev, "image.bin");
-    while(1)
+    while(1) {
 	vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
 }
