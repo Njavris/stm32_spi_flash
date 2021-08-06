@@ -1,4 +1,5 @@
 idf_component_register(SRCS
 	"main.c"
-	"flash.c"
+	"spi.c"
+	"stm32_flasher.c"
 	INCLUDE_DIRS "")
