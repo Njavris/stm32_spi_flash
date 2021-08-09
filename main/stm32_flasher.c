@@ -205,15 +205,19 @@ static int stm32_erase_mem(struct flasher_dev *dev, uint16_t page) {
     return 0;
 }
 
-void test_write(struct flasher_dev *dev, uint8_t val) {
+void test_write(struct flasher_dev *dev, uint8_t val, uint16_t page) {
     uint8_t write_buf[0x100];
     uint8_t read_buf[0x100];
     memset(read_buf, 0, sizeof(read_buf));
     memset(write_buf, val, sizeof(write_buf));
+    if (stm32_erase_mem(dev, page))
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
     if (stm32_write_mem(dev, 0x8000000, write_buf, 0x100))
 	ESP_LOGE(STM32_FLASHER_TAG, "Write Failed\n");
     if (stm32_read_mem(dev, 0x8000000, read_buf, 0x100))
 	ESP_LOGE(STM32_FLASHER_TAG, "Read Failed\n");
+    if (stm32_erase_mem(dev, STM32_ERASE_ALL))
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
     printf("WRITE:\n");
     for (int i = 0; i < 0x100; i++)
 	printf("%02x ", write_buf[i]);
@@ -222,7 +226,6 @@ void test_write(struct flasher_dev *dev, uint8_t val) {
     for (int i = 0; i < 0x100; i++)
 	printf("%02x ", read_buf[i]);
     printf("\n");
-
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 
@@ -236,23 +239,13 @@ void stm32_flash_task(void *p) {
     if (stm32_get_ack(dev))
 	goto fail;
 
-    if (stm32_erase_mem(dev, STM32_ERASE_ALL))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
-    test_write(dev, 1);
-    if (stm32_erase_mem(dev, 1))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
-    test_write(dev, 2);
-    if (stm32_erase_mem(dev, 2))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
-    test_write(dev, 3);
-    if (stm32_erase_mem(dev, STM32_ERASE_BANK1))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
-    test_write(dev, 4);
-    if (stm32_erase_mem(dev, STM32_ERASE_BANK2))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
-    test_write(dev, 5);
-
+    test_write(dev, 1, STM32_ERASE_ALL);
+    test_write(dev, 2, 1);
+    test_write(dev, 3, 2);
+    test_write(dev, 4, STM32_ERASE_BANK1);
+    test_write(dev, 5, STM32_ERASE_BANK2);
     
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
     stm32_reset(dev, false);
 
 fail:
