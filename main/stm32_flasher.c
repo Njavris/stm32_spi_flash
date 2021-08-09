@@ -18,6 +18,10 @@ static const char *STM32_FLASHER_TAG = "STM32_FLASHER";
 #define STM32_WRITE	0x31
 #define STM32_ERASE	0x44
 
+#define STM32_ERASE_ALL		0xffff
+#define STM32_ERASE_BANK1	0xfffe
+#define STM32_ERASE_BANK2	0xfffd
+
 static void stm32_reset(struct flasher_dev *dev, bool assert) {
     gpio_set_level(dev->bootm_pin, !(dev->bootm_pol ^ !!assert));
 
@@ -160,17 +164,38 @@ static int stm32_write_mem(struct flasher_dev *dev, uint32_t addr, uint8_t *data
     return 0;
 };
 
-/* TODO erase only necessary parts */
-static int stm32_erase_mem(struct flasher_dev *dev, uint32_t sz) {
+static int stm32_erase_mem(struct flasher_dev *dev, uint16_t page) {
     struct spi_dev *spi = dev->spidev;
     uint8_t buf[5];
     if (stm32_send_cmd(dev, STM32_ERASE)) {
 	ESP_LOGE(STM32_FLASHER_TAG, "Failed to erase\n");
 	return 1;
     }
-    buf[0] = 0xff; 
-    buf[1] = 0xff;
+    if (page == STM32_ERASE_ALL ||
+		page == STM32_ERASE_BANK1 ||
+		page == STM32_ERASE_BANK2) {
+	buf[0] = (page >> 8) & 0xff; 
+	buf[1] = page & 0xff;
+    } else {
+	buf[0] = 0;
+	buf[1] = 0;
+    }
     buf[2] = buf[0] ^ buf[1];
+    spi->tx_rx(spi, buf, NULL, 3);
+
+    if (stm32_get_ack(dev)) {
+	ESP_LOGE(STM32_FLASHER_TAG, "Failed to get erase num ack\n");
+	return 1;
+    }
+
+    if (page == STM32_ERASE_ALL ||
+		page == STM32_ERASE_BANK1 ||
+		page == STM32_ERASE_BANK2)
+	return 0;
+
+    buf[0] = (page >> 8) & 0xff;
+    buf[1] = page & 0xff;
+    buf[2] = buf[0] ^ buf[1] ^ buf[2];
     spi->tx_rx(spi, buf, NULL, 3);
 
     if (stm32_get_ack(dev)) {
@@ -180,27 +205,15 @@ static int stm32_erase_mem(struct flasher_dev *dev, uint32_t sz) {
     return 0;
 }
 
-void stm32_flash_task(void *p) {
-    struct flasher_dev *dev = (struct flasher_dev *)p;
-
+void test_write(struct flasher_dev *dev, uint8_t val) {
     uint8_t write_buf[0x100];
-    memset(write_buf, 0x69, sizeof(write_buf));
     uint8_t read_buf[0x100];
     memset(read_buf, 0, sizeof(read_buf));
-
-    stm32_reset(dev, true);
-    if (stm32_sync(dev))
-	goto fail;
-    if (stm32_get_ack(dev))
-	goto fail;
-
-    if (stm32_erase_mem(dev, 0x100))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
+    memset(write_buf, val, sizeof(write_buf));
     if (stm32_write_mem(dev, 0x8000000, write_buf, 0x100))
 	ESP_LOGE(STM32_FLASHER_TAG, "Write Failed\n");
     if (stm32_read_mem(dev, 0x8000000, read_buf, 0x100))
-	ESP_LOGE(STM32_FLASHER_TAG, "Reade Failed\n");
-
+	ESP_LOGE(STM32_FLASHER_TAG, "Read Failed\n");
     printf("WRITE:\n");
     for (int i = 0; i < 0x100; i++)
 	printf("%02x ", write_buf[i]);
@@ -211,6 +224,34 @@ void stm32_flash_task(void *p) {
     printf("\n");
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
+}
+
+void stm32_flash_task(void *p) {
+    struct flasher_dev *dev = (struct flasher_dev *)p;
+
+
+    stm32_reset(dev, true);
+    if (stm32_sync(dev))
+	goto fail;
+    if (stm32_get_ack(dev))
+	goto fail;
+
+    if (stm32_erase_mem(dev, STM32_ERASE_ALL))
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
+    test_write(dev, 1);
+    if (stm32_erase_mem(dev, 1))
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
+    test_write(dev, 2);
+    if (stm32_erase_mem(dev, 2))
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
+    test_write(dev, 3);
+    if (stm32_erase_mem(dev, STM32_ERASE_BANK1))
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
+    test_write(dev, 4);
+    if (stm32_erase_mem(dev, STM32_ERASE_BANK2))
+	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
+    test_write(dev, 5);
+
     
     stm32_reset(dev, false);
 
