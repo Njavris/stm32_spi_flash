@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include "spi.h"
 #include "stm32_flasher.h"
+#include "esp_spiffs.h"
 
 void app_main(void) {
     struct spi_dev spidev;

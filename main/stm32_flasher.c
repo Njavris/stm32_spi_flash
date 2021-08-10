@@ -7,6 +7,7 @@
 #include <driver/gpio.h>
 #include "esp_log.h"
 #include "stm32_flasher.h"
+#include "esp_spiffs.h"
 
 static const char *STM32_FLASHER_TAG = "STM32_FLASHER";
 
