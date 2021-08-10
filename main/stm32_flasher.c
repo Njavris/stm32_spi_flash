@@ -229,6 +229,29 @@ void test_write(struct flasher_dev *dev, uint8_t val, uint16_t page) {
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 
+#define PAGE_SZ				0x1000
+#define ADDR_TO_PAGE(addr, base)	(((addr) - (base)) / PAGE_SZ)
+
+int stm32_write_file(struct flasher_dev *dev, uint32_t addr) {
+    uint32_t offs = 0;
+    uint8_t buf[0x100];
+    int nbytes;
+    FILE *f = fopen(dev->fn, "rb");
+    if (!f) {
+        ESP_LOGE(STM32_FLASHER_TAG, "Failed to open file for reading");
+        return 1;
+    }
+    while ((nbytes = fread(buf, 1, sizeof(buf), f)) > 0) {
+	if (!((addr + offs) % 0x1000))
+	    stm32_erase_mem(dev, ADDR_TO_PAGE(addr + offs, addr));
+	stm32_write_mem(dev, addr + offs, buf, nbytes);
+	offs += nbytes;
+    }
+    fclose(f);
+    return 0;
+}
+
+
 void stm32_flash_task(void *p) {
     struct flasher_dev *dev = (struct flasher_dev *)p;
 
@@ -239,11 +262,12 @@ void stm32_flash_task(void *p) {
     if (stm32_get_ack(dev))
 	goto fail;
 
-    test_write(dev, 1, STM32_ERASE_ALL);
-    test_write(dev, 2, 1);
-    test_write(dev, 3, 2);
-    test_write(dev, 4, STM32_ERASE_BANK1);
-    test_write(dev, 5, STM32_ERASE_BANK2);
+//    test_write(dev, 1, STM32_ERASE_ALL);
+//    test_write(dev, 2, 1);
+//    test_write(dev, 3, 2);
+//    test_write(dev, 4, STM32_ERASE_BANK1);
+//    test_write(dev, 5, STM32_ERASE_BANK2);
+    stm32_write_file(dev, 0x8000000);
     
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     stm32_reset(dev, false);
