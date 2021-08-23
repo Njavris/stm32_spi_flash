@@ -68,7 +68,7 @@ static int stm32_get_ack(struct flasher_dev *dev) {
 	spi->tx_rx(spi, NULL, &buf, 1);
 	if (buf == STM32_ACK) {
 	    spi->tx_rx(spi, &buf, NULL, 1);
-ESP_LOGI(STM32_FLASHER_TAG, "ACK in %d tries\n", i);
+//ESP_LOGI(STM32_FLASHER_TAG, "ACK in %d tries\n", i);
 	    return 0;
 	} else if (buf == STM32_NACK) {
 	    ESP_LOGE(STM32_FLASHER_TAG, "Got NACK\n");
