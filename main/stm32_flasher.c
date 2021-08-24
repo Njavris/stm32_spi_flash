@@ -206,30 +206,6 @@ static int stm32_erase_mem(struct flasher_dev *dev, uint16_t page) {
     return 0;
 }
 
-void test_write(struct flasher_dev *dev, uint8_t val, uint16_t page) {
-    uint8_t write_buf[0x100];
-    uint8_t read_buf[0x100];
-    memset(read_buf, 0, sizeof(read_buf));
-    memset(write_buf, val, sizeof(write_buf));
-    if (stm32_erase_mem(dev, page))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
-    if (stm32_write_mem(dev, 0x8000000, write_buf, 0x100))
-	ESP_LOGE(STM32_FLASHER_TAG, "Write Failed\n");
-    if (stm32_read_mem(dev, 0x8000000, read_buf, 0x100))
-	ESP_LOGE(STM32_FLASHER_TAG, "Read Failed\n");
-    if (stm32_erase_mem(dev, STM32_ERASE_ALL))
-	ESP_LOGE(STM32_FLASHER_TAG, "Erase Failed\n");
-    printf("WRITE:\n");
-    for (int i = 0; i < 0x100; i++)
-	printf("%02x ", write_buf[i]);
-    printf("\n");
-    printf("READ:\n");
-    for (int i = 0; i < 0x100; i++)
-	printf("%02x ", read_buf[i]);
-    printf("\n");
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-}
-
 #define PAGE_SZ				0x1000
 #define ADDR_TO_PAGE(addr, base)	(((addr) - (base)) / PAGE_SZ)
 
@@ -242,7 +218,11 @@ int stm32_write_file(struct flasher_dev *dev, uint32_t addr) {
         ESP_LOGE(STM32_FLASHER_TAG, "Failed to open file for reading");
         return 1;
     }
+    ESP_LOGI(STM32_FLASHER_TAG, "Writing file %s\n", dev->fn);
+    printf("Writing\n");
     while ((nbytes = fread(buf, 1, sizeof(buf), f)) > 0) {
+	printf("\033[1A\033[K");
+	printf("\b\rWriting: %x\n", addr + offs);
 	if (!((addr + offs) % 0x1000))
 	    stm32_erase_mem(dev, ADDR_TO_PAGE(addr + offs, addr));
 	stm32_write_mem(dev, addr + offs, buf, nbytes);
@@ -252,10 +232,40 @@ int stm32_write_file(struct flasher_dev *dev, uint32_t addr) {
     return 0;
 }
 
+int stm32_write_file_verify(struct flasher_dev *dev, uint32_t addr) {
+    uint32_t offs = 0;
+    uint8_t buf[0x100], rbuf[0x100];
+    int nbytes;
+    FILE *f = fopen(dev->fn, "rb");
+    if (!f) {
+        ESP_LOGE(STM32_FLASHER_TAG, "Failed to open file for reading");
+        return 1;
+    }
+    ESP_LOGI(STM32_FLASHER_TAG, "Verifying file %s\n", dev->fn);
+    printf("Verifying\n");
+    while ((nbytes = fread(buf, 1, sizeof(buf), f)) > 0) {
+	printf("\033[1A\033[K");
+	printf("\b\rVerifying: %x\n", addr + offs);
+	stm32_read_mem(dev, addr + offs, rbuf, nbytes);
+	if (memcmp(rbuf, buf, 0x100))
+	    return 1;
+	offs += nbytes;
+    }
+    fclose(f);
+    return 0;
+}
 
 void stm32_flash_task(void *p) {
     struct flasher_dev *dev = (struct flasher_dev *)p;
-
+    esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/spiffs",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = true
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK)
+	goto fail;
 
     stm32_reset(dev, true);
     if (stm32_sync(dev))
@@ -263,18 +273,18 @@ void stm32_flash_task(void *p) {
     if (stm32_get_ack(dev))
 	goto fail;
 
-//    test_write(dev, 1, STM32_ERASE_ALL);
-//    test_write(dev, 2, 1);
-//    test_write(dev, 3, 2);
-//    test_write(dev, 4, STM32_ERASE_BANK1);
-//    test_write(dev, 5, STM32_ERASE_BANK2);
     stm32_write_file(dev, 0x8000000);
+    if (stm32_write_file_verify(dev, 0x8000000))
+	ESP_LOGI(STM32_FLASHER_TAG, "Verification failed\n");
+    else
+	ESP_LOGI(STM32_FLASHER_TAG, "Verified\n");
     
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     stm32_reset(dev, false);
 
 fail:
     ESP_LOGI(STM32_FLASHER_TAG, "%s done\n", __func__);
+    esp_vfs_spiffs_unregister(conf.partition_label);
     vTaskDelete(NULL);
 }
 
