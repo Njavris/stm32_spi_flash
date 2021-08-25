@@ -265,13 +265,16 @@ void stm32_flash_task(void *p) {
     };
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK)
-	goto fail;
+	goto done;
 
     stm32_reset(dev, true);
     if (stm32_sync(dev))
-	goto fail;
+	goto done;
     if (stm32_get_ack(dev))
-	goto fail;
+	goto done;
+
+    ESP_LOGI(STM32_FLASHER_TAG, "Erasing mem\n");
+    stm32_erase_mem(dev, STM32_ERASE_ALL);
 
     stm32_write_file(dev, 0x8000000);
     if (stm32_write_file_verify(dev, 0x8000000))
@@ -282,7 +285,7 @@ void stm32_flash_task(void *p) {
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     stm32_reset(dev, false);
 
-fail:
+done:
     ESP_LOGI(STM32_FLASHER_TAG, "%s done\n", __func__);
     esp_vfs_spiffs_unregister(conf.partition_label);
     vTaskDelete(NULL);
