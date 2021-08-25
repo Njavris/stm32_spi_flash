@@ -4,6 +4,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <driver/gpio.h>
 #include "esp_log.h"
 #include "stm32_flasher.h"
@@ -23,6 +24,9 @@ static const char *STM32_FLASHER_TAG = "STM32_FLASHER";
 #define STM32_ERASE_BANK1	0xfffe
 #define STM32_ERASE_BANK2	0xfffd
 
+static enum flasher_result stm32_flasher_status = FLASHER_STATUS_MAX;
+SemaphoreHandle_t flasher_status_mutex = NULL;
+
 static void stm32_reset(struct flasher_dev *dev, bool assert) {
     gpio_set_level(dev->bootm_pin, !(dev->bootm_pol ^ !!assert));
 
@@ -32,7 +36,11 @@ static void stm32_reset(struct flasher_dev *dev, bool assert) {
     vTaskDelay(100 / portTICK_PERIOD_MS);
 }
 
-void flasher_init(struct flasher_dev *dev, struct spi_dev *spi, char *filename) {
+int flasher_init(struct flasher_dev *dev, struct spi_dev *spi, char *filename, uint32_t address) {
+    xSemaphoreTake(flasher_status_mutex, portMAX_DELAY);
+    if (stm32_flasher_status && stm32_flasher_status != FLASHER_STATUS_MAX)
+	return 1;
+    xSemaphoreGive(flasher_status_mutex);
     memset(dev, 0, sizeof(struct flasher_dev));
     dev->spidev = spi;
     dev->rst_pin = CONFIG_STM32_PIN_RESET;
@@ -40,11 +48,11 @@ void flasher_init(struct flasher_dev *dev, struct spi_dev *spi, char *filename) 
     dev->bootm_pin = CONFIG_STM32_PIN_BOOTM;
     dev->bootm_pol = CONFIG_STM32_POL_BOOTM;
     dev->fn = filename;
+    dev->address = address;
 
     gpio_set_direction(dev->bootm_pin, GPIO_MODE_OUTPUT);
     gpio_set_direction(dev->rst_pin, GPIO_MODE_OUTPUT);
-//    gpio_set_pull_mode(dev->bootm_pin, GPIO_PULLUP_ONLY);
-//    gpio_set_pull_mode(dev->rst_pin, GPIO_PULLUP_ONLY);
+    return 0;
 }
 
 static int stm32_sync(struct flasher_dev *dev) {
@@ -68,7 +76,6 @@ static int stm32_get_ack(struct flasher_dev *dev) {
 	spi->tx_rx(spi, NULL, &buf, 1);
 	if (buf == STM32_ACK) {
 	    spi->tx_rx(spi, &buf, NULL, 1);
-//ESP_LOGI(STM32_FLASHER_TAG, "ACK in %d tries\n", i);
 	    return 0;
 	} else if (buf == STM32_NACK) {
 	    ESP_LOGE(STM32_FLASHER_TAG, "Got NACK\n");
@@ -209,8 +216,8 @@ static int stm32_erase_mem(struct flasher_dev *dev, uint16_t page) {
 #define PAGE_SZ				0x1000
 #define ADDR_TO_PAGE(addr, base)	(((addr) - (base)) / PAGE_SZ)
 
-int stm32_write_file(struct flasher_dev *dev, uint32_t addr) {
-    uint32_t offs = 0;
+int stm32_write_file(struct flasher_dev *dev) {
+    uint32_t addr = dev->address;
     uint8_t buf[0x100];
     int nbytes;
     FILE *f = fopen(dev->fn, "rb");
@@ -222,18 +229,18 @@ int stm32_write_file(struct flasher_dev *dev, uint32_t addr) {
     printf("Writing\n");
     while ((nbytes = fread(buf, 1, sizeof(buf), f)) > 0) {
 	printf("\033[1A\033[K");
-	printf("\b\rWriting: %x\n", addr + offs);
-	if (!((addr + offs) % 0x1000))
-	    stm32_erase_mem(dev, ADDR_TO_PAGE(addr + offs, addr));
-	stm32_write_mem(dev, addr + offs, buf, nbytes);
-	offs += nbytes;
+	printf("\b\rWriting: %x\n", addr);
+	if (!(addr % 0x1000))
+	    stm32_erase_mem(dev, ADDR_TO_PAGE(addr, dev->address));
+	stm32_write_mem(dev, addr, buf, nbytes);
+	addr += nbytes;
     }
     fclose(f);
     return 0;
 }
 
-int stm32_write_file_verify(struct flasher_dev *dev, uint32_t addr) {
-    uint32_t offs = 0;
+int stm32_write_file_verify(struct flasher_dev *dev) {
+    uint32_t addr = dev->address;
     uint8_t buf[0x100], rbuf[0x100];
     int nbytes;
     FILE *f = fopen(dev->fn, "rb");
@@ -245,11 +252,11 @@ int stm32_write_file_verify(struct flasher_dev *dev, uint32_t addr) {
     printf("Verifying\n");
     while ((nbytes = fread(buf, 1, sizeof(buf), f)) > 0) {
 	printf("\033[1A\033[K");
-	printf("\b\rVerifying: %x\n", addr + offs);
-	stm32_read_mem(dev, addr + offs, rbuf, nbytes);
-	if (memcmp(rbuf, buf, 0x100))
+	printf("\b\rVerifying: %x\n", addr);
+	stm32_read_mem(dev, addr, rbuf, nbytes);
+	if (memcmp(rbuf, buf, sizeof(rbuf)))
 	    return 1;
-	offs += nbytes;
+	addr += nbytes;
     }
     fclose(f);
     return 0;
@@ -257,6 +264,9 @@ int stm32_write_file_verify(struct flasher_dev *dev, uint32_t addr) {
 
 void stm32_flash_task(void *p) {
     struct flasher_dev *dev = (struct flasher_dev *)p;
+    xSemaphoreTake(flasher_status_mutex, portMAX_DELAY);
+    stm32_flasher_status = FLASHER_RUNNING; 
+    xSemaphoreGive(flasher_status_mutex);
     esp_vfs_spiffs_conf_t conf = {
       .base_path = "/spiffs",
       .partition_label = NULL,
@@ -276,24 +286,41 @@ void stm32_flash_task(void *p) {
     ESP_LOGI(STM32_FLASHER_TAG, "Erasing mem\n");
     stm32_erase_mem(dev, STM32_ERASE_ALL);
 
-    stm32_write_file(dev, 0x8000000);
-    if (stm32_write_file_verify(dev, 0x8000000))
+    stm32_write_file(dev);
+    if (stm32_write_file_verify(dev)) {
 	ESP_LOGI(STM32_FLASHER_TAG, "Verification failed\n");
-    else
+	goto done;
+    } else {
 	ESP_LOGI(STM32_FLASHER_TAG, "Verified\n");
+    }
     
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
     stm32_reset(dev, false);
-
+    xSemaphoreTake(flasher_status_mutex, portMAX_DELAY);
+    stm32_flasher_status = FLASHER_SUCCESS;
+    xSemaphoreGive(flasher_status_mutex);
 done:
     ESP_LOGI(STM32_FLASHER_TAG, "%s done\n", __func__);
     esp_vfs_spiffs_unregister(conf.partition_label);
+    xSemaphoreTake(flasher_status_mutex, portMAX_DELAY);
+    if (stm32_flasher_status)
+	stm32_flasher_status = FLASHER_FAILED;
+    xSemaphoreGive(flasher_status_mutex);
     vTaskDelete(NULL);
 }
 
-void spawn_flash_task(struct flasher_dev *dev, struct spi_dev *spi, char *filename) {
-    TaskHandle_t flash_task_hndl = NULL;
-    flasher_init(dev, spi, filename);
+void spawn_flash_task(struct flasher_dev *dev, struct spi_dev *spi, char *filename, uint32_t address) {
+    flasher_status_mutex = xSemaphoreCreateMutex();
+    if (flasher_init(dev, spi, filename, address))
+	return;
     xTaskCreate(stm32_flash_task, "STM32_flash_task", CONFIG_STM32_TASK_FRAME,
-			dev, 1, &flash_task_hndl);
+			dev, 1, &dev->flash_task_hndl);
+}
+
+
+enum flasher_result get_flasher_result(struct flasher_dev *dev) {
+    enum flasher_result ret;
+    xSemaphoreTake(flasher_status_mutex, portMAX_DELAY);
+    ret = stm32_flasher_status;
+    xSemaphoreGive(flasher_status_mutex);
+    return ret;
 }

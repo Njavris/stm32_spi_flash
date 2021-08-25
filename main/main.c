@@ -9,7 +9,7 @@ void app_main(void) {
     struct flasher_dev flashdev;
 
     spi_init(&spidev);
-    spawn_flash_task(&flashdev, &spidev, /*"/spiffs/image.bin"*/"/spiffs/STM32L4R9A.bin");
+    spawn_flash_task(&flashdev, &spidev, /*"/spiffs/image.bin"*/"/spiffs/STM32L4R9A.bin", 0x8000000);
 
     while(1) {
 	vTaskDelay(1000 / portTICK_PERIOD_MS);
